@@ -11,9 +11,43 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Esta función se encarga de refrescar la pantalla cada vez que volvemos de registrar algo
+  String _busqueda = ""; // Para el buscador
+  final _searchController = TextEditingController();
+
   void _actualizarLista() {
-    setState(() {}); // Recarga el FutureBuilder
+    setState(() {}); 
+  }
+
+  int _calcularDiasRestantes(String fechaCaducidad) {
+    try {
+      DateTime fecha = DateTime.parse(fechaCaducidad);
+      DateTime hoy = DateTime.now();
+      return fecha.difference(hoy).inDays;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  // FUNCIÓN PARA ELIMINAR CON CONFIRMACIÓN
+  void _confirmarEliminar(int id, String nombre) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('¿Eliminar producto?'),
+        content: Text('¿Estás seguro de borrar "$nombre"? Esta acción no se puede deshacer.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR')),
+          TextButton(
+            onPressed: () async {
+              await DbHelper().eliminarProducto(id);
+              Navigator.pop(context);
+              _actualizarLista();
+            }, 
+            child: const Text('ELIMINAR', style: TextStyle(color: Colors.red))
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -21,58 +55,96 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Inventario Ganadero'),
-        backgroundColor: Colors.blue,
+        backgroundColor: Colors.blue[800],
         foregroundColor: Colors.white,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(60),
+          child: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (value) => setState(() => _busqueda = value.toLowerCase()),
+              decoration: InputDecoration(
+                hintText: 'Buscar medicina o vacuna...',
+                prefixIcon: const Icon(Icons.search),
+                fillColor: Colors.white,
+                filled: true,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
+        ),
       ),
-      // FutureBuilder es el "puente" entre SQLite y tu pantalla
       body: FutureBuilder<List<Producto>>(
-        future: DbHelper().obtenerProductos(), // Va a la base de datos
+        future: DbHelper().obtenerProductos(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator()); // Cargando...
+            return const Center(child: CircularProgressIndicator());
           }
           
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text('No hay productos. Pica el + para agregar.'));
+            return const Center(child: Text('No hay productos registrados.'));
           }
 
-          final productos = snapshot.data!;
+          // FILTRADO EN TIEMPO REAL
+          final productos = snapshot.data!.where((p) {
+            return p.nombre.toLowerCase().contains(_busqueda);
+          }).toList();
 
           return ListView.builder(
             itemCount: productos.length,
             itemBuilder: (context, index) {
               final prod = productos[index];
-              
-              // Lógica de alerta: si la cantidad es menor al stock mínimo, se pone rojo
               bool stockBajo = prod.cantidad <= prod.stockMinimo;
+              int diasRestantes = _calcularDiasRestantes(prod.fechaCaducidad);
+
+              Color colorCad = diasRestantes < 0 ? Colors.red : (diasRestantes <= 30 ? Colors.orange : Colors.green);
 
               return Card(
-                elevation: 3,
-                margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                elevation: 4,
+                margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 child: ListTile(
+                  onLongPress: () => _confirmarEliminar(prod.id!, prod.nombre), // ELIMINAR
                   leading: CircleAvatar(
                     backgroundColor: prod.tipo == 'Vacuna' ? Colors.blue : Colors.orange,
-                    child: Icon(
-                      prod.tipo == 'Vacuna' ? Icons.vaccines : Icons.medication,
-                      color: Colors.white,
-                    ),
+                    child: Icon(prod.tipo == 'Vacuna' ? Icons.vaccines : Icons.medication, color: Colors.white),
                   ),
                   title: Text(prod.nombre, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('${prod.presentacion}\nCaduca: ${prod.fechaCaducidad}'),
-                  isThreeLine: true,
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '${prod.cantidad}',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: stockBajo ? Colors.red : Colors.green[800],
-                        ),
-                      ),
-                      const Text('Exist.', style: TextStyle(fontSize: 10)),
+                      Text(prod.presentacion, style: const TextStyle(fontSize: 12)),
+                      Text("Vence en $diasRestantes días", style: TextStyle(color: colorCad, fontWeight: FontWeight.bold, fontSize: 11)),
                     ],
+                  ),
+                  trailing: SizedBox(
+                    width: 110,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.remove_circle, color: Colors.redAccent),
+                          onPressed: () async {
+                            if (prod.cantidad > 0) {
+                              await DbHelper().actualizarStock(prod.id!, prod.cantidad - 1);
+                              _actualizarLista();
+                            }
+                          },
+                        ),
+                        Expanded(child: Text('${prod.cantidad}', textAlign: TextAlign.center, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: stockBajo ? Colors.red : Colors.blue[900]))),
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.add_circle, color: Colors.green),
+                          onPressed: () async {
+                            await DbHelper().actualizarStock(prod.id!, prod.cantidad + 1);
+                            _actualizarLista();
+                          },
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -82,15 +154,10 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
-          // Esperamos a que el usuario termine de registrar
-          await Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const RegistroScreen()),
-          );
-          // Cuando regresa, actualizamos la lista automáticamente
+          await Navigator.push(context, MaterialPageRoute(builder: (context) => const RegistroScreen()));
           _actualizarLista();
         },
-        backgroundColor: Colors.green[700],
+        backgroundColor: Colors.blue[800],
         child: const Icon(Icons.add, color: Colors.white),
       ),
     );
