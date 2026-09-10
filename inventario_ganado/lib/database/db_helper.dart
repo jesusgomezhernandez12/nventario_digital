@@ -75,4 +75,15 @@ class DbHelper {
       whereArgs: [id],
     );
   }
+
+  // 5. Actualizar solo el stock (cantidad)
+  Future<int> actualizarStock(int id, int nuevaCantidad) async {
+    final db = await database;
+    return await db.update(
+      'productos',
+      {'cantidad': nuevaCantidad},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
 }
